@@ -8,36 +8,27 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#include "TypeDef.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
 #include "lcd_i2c.h"
-#include "TypeDef.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// Declare a SineWave struct and a Timer struct
-SineWave sineWave = {
-    .zoneThresholds = {980, 1258, 1536, 1814, 2092, 2370, 2648, 2926, 3200},
-    .prevZone = 1,
-    .beepRequest = 0
-};
 
-Timer timer = {
-    .delayValue = 200,  // Poll every 200ms
-    .raw = 0,
-    .currTime = 0,
-    .prevTime = 0
-};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+SineWave sineWave = {
+	    .zoneThresholds = {400, 800, 1200, 1600, 2000, 2400, 2800, 3000, 3200},
+	    .prevZone = 0,
+	    .beepRequest = 0
+	};
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,7 +49,6 @@ TIM_HandleTypeDef htim6;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-int zone = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -72,13 +62,22 @@ static void MX_TIM6_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 int GetZone(uint16_t adcValue);
+void UpdateSineTable(uint16_t amplitude);
 void updateLcdZone(uint16_t zone);
 void PlaySineBeep(uint16_t times);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+// Redirect printf to ITM channel 0
+int _write(int file, char *ptr, int len)
+{
+  for (int i = 0; i < len; i++)
+  {
+    ITM_SendChar(*ptr++);
+  }
+  return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -89,6 +88,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  Timer timer = {200, 0, 0, 0}; // Initialize Timer structure with delay value 200 ms
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -97,7 +97,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  SineWave sineWave;
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -117,9 +117,8 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   //DMA for sine wave generation
-  UpdateSineTable(&sineWave, zone * 200);
-  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*)sineWave.SineTable,
-                          SINE_SAMPLES, DAC_ALIGN_12B_R);
+  UpdateSineTable(1000);
+  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, sineWave.SineTable, SINE_SAMPLES, DAC_ALIGN_12B_R);
   HAL_TIM_Base_Start(&htim6);   // <--- Start the timer
   //start swv
   printf("SWV trace started!\r\n");
@@ -127,42 +126,51 @@ int main(void)
   LCD_Init(&hi2c1);
   LCD_SetCursor(0, 0);
   LCD_SendString("Light Detection");
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
+  {
+      timer.currTime = HAL_GetTick();
+      if (timer.currTime - timer.prevTime >= timer.delayValue)
       {
-	      timer.currTime = HAL_GetTick();
-	      if (timer.currTime - timer.prevTime >= timer.delayValue)  // Check every 200ms
-	          {
-	           // Read ADC (light sensor)
-	           HAL_ADC_Start(&hadc1);
-	           HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	           timer.raw = HAL_ADC_GetValue(&hadc1);
+          // Read ADC (light sensor)
+    	  printf("1\n");
+          HAL_ADC_Start(&hadc1);
+          printf("2\n");
+          HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+          printf("3\n");
+          timer.raw = HAL_ADC_GetValue(&hadc1);
 
-	           // Determine brightness zone
-	           int zone = GetZone(timer.raw);
+          // Determine brightness zone
+          printf("4\n");
+          int zone = GetZone(timer.raw);
+          HAL_Delay(3);
+          printf("5\n");
+          updateLcdZone(zone);
 
-	           // Update LCD based on the zone
-	           updateLcdZone(zone);
+          // Update sine table only if needed
+          printf("6\n");
+          if (zone != sineWave.prevZone)
+          {
+              UpdateSineTable(zone * 200);
+              sineWave.prevZone = zone;
+              printf("ADC=%u, Zone=%d\r\n", timer.raw, zone);
+          }
 
-	           // Update sine table if the zone has changed
-	           if (zone != sineWave.prevZone)
-	              {
-	                  UpdateSineTable(&sineWave, zone * 200);
-	                  sineWave.prevZone = zone;
-	              }
+          timer.prevTime = timer.currTime;
+      }
 
-	           timer.prevTime = timer.currTime;
-	          }
-	       // Handle beep requests if set
-	       if (sineWave.beepRequest > 0)
-	          {
-	          PlaySineBeep(sineWave.beepRequest);
-	          sineWave.beepRequest = 0;  // Reset the beep request flag
-	          }
-	      }
+      // Handle beeps if requested by button interrupt
+      printf("7\n");
+      if (sineWave.beepRequest > 0)
+      {
+          PlaySineBeep(sineWave.beepRequest);
+          sineWave.beepRequest = 0;  // reset flag
+      }
+  }
   /* USER CODE END 3 */
 }
 
@@ -503,64 +511,59 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 //generate sine wave
-void UpdateSineTable(SineWave *sineWave, uint16_t amplitude)
+void UpdateSineTable(uint16_t amplitude)
 {
-    if (amplitude < 200) amplitude = 200;  // Clamp to minimum amplitude
+    if (amplitude < 200) amplitude = 200; // clamp minimum
+    if (amplitude > 1800) amplitude = 1800;  // Prevent DAC overflow
     for (int i = 0; i < SINE_SAMPLES; i++) {
         double theta = 2.0 * M_PI * i / SINE_SAMPLES;
-        sineWave->SineTable[i] = (uint16_t)(2047 + amplitude * sin(theta));
+        sineWave.SineTable[i] = (uint16_t)(2047 + amplitude * sin(theta));
     }
 }
-
 //get the 9 zones
-int GetZone(uint16_t adcValue)
-{
+int GetZone(uint16_t adcValue){
     for (int i = 0; i < 9; i++)
     {
         if (adcValue <= sineWave.zoneThresholds[i])
-            return i;  // Return the zone index
+            return i;   // return zone index
     }
-    return 8;  // Return the last zone if ADC value exceeds the last threshold
+    return 8; // if adcValue > last threshold, clamp to zone 8
 }
 //print out the zone in Lcd
-void updateLcdZone(uint16_t zone)
-{
-    LCD_SetCursor(1, 0);
-    char msg[16];
-    sprintf(msg, "Level: %d", zone);
-    LCD_SendString("                ");  // Clear row
-    LCD_SetCursor(1, 0);  // Write in row 1, col 0
-    LCD_SendString(msg);  // Send message
-    if (zone > 8) zone = 8;  // Ensure the zone doesn't exceed 8
+void updateLcdZone(uint16_t zone){
+	LCD_SetCursor(1, 0);
+	char msg[16];
+	sprintf(msg, "Level: %d", zone);
+	LCD_SendString("                "); // Clear the row
+	LCD_SetCursor(1, 0);
+	LCD_SendString(msg);
+	if (zone > 8) zone = 8;
 }
 
 // Silence table (flat DC at mid-scale)
-void SilenceSineTable(SineWave *sineWave)
+void SilenceSineTable(void)
 {
-    for (int i = 0; i < 256; i++) {
-        sineWave->SineTable[i] = 2048;  // Mid-scale (2048 for 12-bit DAC)
+    for (int i = 0; i < SINE_SAMPLES; i++) {
+        sineWave.SineTable[i] = 2048;
     }
 }
-
 
 // Simple beep sequence using sine + silence
 void PlaySineBeep(uint16_t times)
 {
-    for (uint16_t t = 0; t < times; t++)
-    {
-        // Beep ON
-    	UpdateSineTable(&sineWave, 1500);// high amplitude
-        HAL_Delay(300);
-
-        // Beep OFF
-        SilenceSineTable(&sineWave);
-        HAL_Delay(200);
-    }
-    HAL_Delay(500);
-
-    // Restore background sine according to zone
-    UpdateSineTable(&sineWave, zone * 200);
+	for (uint16_t t = 0; t < times; t++)
+		{
+		// Beep ON
+		UpdateSineTable(1500); //strong amplitude
+		HAL_Delay(300);
+		// Beep OFF
+		SilenceSineTable();
+		HAL_Delay(200);
+		}
+	HAL_Delay(500); // Restore background sine according to zone
+	UpdateSineTable(sineWave.prevZone * 200);
 }
+
 
 // Interrupt callback: only set flag
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -569,16 +572,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     {
         sineWave.beepRequest = sineWave.prevZone;  // request zone-number beeps
     }
-}
-
-// Redirect printf to ITM channel 0
-int _write(int file, char *ptr, int len)
-{
-  for (int i = 0; i < len; i++)
-  {
-    ITM_SendChar(*ptr++);
-  }
-  return len;
 }
 
 /* USER CODE END 4 */
