@@ -72,12 +72,23 @@ void PlaySineBeep(uint16_t times);
 // Redirect printf to ITM channel 0
 int _write(int file, char *ptr, int len)
 {
+#ifdef DEBUG
+  // When debugging: send via SWV (ITM)
   for (int i = 0; i < len; i++)
   {
     ITM_SendChar(*ptr++);
   }
+#else
+  // When running standalone (no debugger): do nothing
+  // or you can transmit via UART if you want (optional)
+  (void)file;
+  (void)ptr;
+  (void)len;
+#endif
+
   return len;
 }
+
 /* USER CODE END 0 */
 
 /**
