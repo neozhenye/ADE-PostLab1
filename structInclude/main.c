@@ -69,25 +69,6 @@ void PlaySineBeep(uint16_t times);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// Redirect printf to ITM channel 0
-int _write(int file, char *ptr, int len)
-{
-#ifdef DEBUG
-  // When debugging: send via SWV (ITM)
-  for (int i = 0; i < len; i++)
-  {
-    ITM_SendChar(*ptr++);
-  }
-#else
-  // When running standalone (no debugger): do nothing
-  // or you can transmit via UART if you want (optional)
-  (void)file;
-  (void)ptr;
-  (void)len;
-#endif
-
-  return len;
-}
 
 /* USER CODE END 0 */
 
@@ -129,10 +110,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
   //DMA for sine wave generation
   UpdateSineTable(1000);
-  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, sineWave.SineTable, SINE_SAMPLES, DAC_ALIGN_12B_R);
+  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*)sineWave.SineTable, SINE_SAMPLES, DAC_ALIGN_12B_R);
   HAL_TIM_Base_Start(&htim6);   // <--- Start the timer
-  //start swv
-  printf("SWV trace started!\r\n");
   //start lcd
   LCD_Init(&hi2c1);
   LCD_SetCursor(0, 0);
@@ -148,34 +127,26 @@ int main(void)
       if (timer.currTime - timer.prevTime >= timer.delayValue)
       {
           // Read ADC (light sensor)
-    	  printf("1\n");
           HAL_ADC_Start(&hadc1);
-          printf("2\n");
           HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-          printf("3\n");
           timer.raw = HAL_ADC_GetValue(&hadc1);
 
           // Determine brightness zone
-          printf("4\n");
           int zone = GetZone(timer.raw);
           HAL_Delay(3);
-          printf("5\n");
           updateLcdZone(zone);
 
           // Update sine table only if needed
-          printf("6\n");
           if (zone != sineWave.prevZone)
           {
               UpdateSineTable(zone * 200);
               sineWave.prevZone = zone;
-              printf("ADC=%u, Zone=%d\r\n", timer.raw, zone);
           }
 
           timer.prevTime = timer.currTime;
       }
 
       // Handle beeps if requested by button interrupt
-      printf("7\n");
       if (sineWave.beepRequest > 0)
       {
           PlaySineBeep(sineWave.beepRequest);
